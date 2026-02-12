@@ -1,0 +1,116 @@
+/*******************
+Gender-split baseline analysis (Table D.1) for paper:
+
+"Working longer, feeling worse? How job quality shapes the mental health toll of delayed retirement"
+by Alexandra Lugova, Michele Belloni, Berangere Legendre, Jeremy Tanguy
+
+This do-file reproduces the baseline stacked SHARE regressions (Table 3 specification),
+run separately for:
+- Men:    gender == 0
+- Women:  gender == 1
+
+Input (not provided in replication package):
+- share_stacked.csv  (constructed from SHARE data; see share_preprocessing.py)
+
+******************************************************************************************/
+
+* Set the directory to where your input CSV is stored
+cd "/path/to/your/data"
+
+*-------------------------------*
+* 1) Import data
+*-------------------------------*
+local SHARE_FILE "share_stacked.csv"
+
+capture confirm file "`SHARE_FILE'"
+if _rc {
+    di as err "ERROR: Cannot find `SHARE_FILE'."
+    di as err "Place share_stacked.csv in the working directory or edit SHARE_FILE path."
+    exit 601
+}
+
+import delimited "`SHARE_FILE'", clear varn(1)
+
+* Quick sanity checks: required variables
+local reqvars eurod eurodcat wh_change wh_change_bin post block cell_block mergeid gender
+foreach v of local reqvars {
+    capture confirm variable `v'
+    if _rc {
+        di as err "ERROR: Variable `v' not found in the dataset. Check column names."
+        exit 198
+    }
+}
+
+*-------------------------------*
+* 2) Key identifiers and controls
+*-------------------------------*
+* cell_block is used as a high-dimensional fixed effect and for clustering.
+capture confirm string variable cell_block
+if !_rc {
+    encode cell_block, gen(cell_block_num)
+}
+else {
+    gen long cell_block_num = cell_block
+}
+
+* Work-horizon change category:
+* 0 = no increase, 1 = +1 year, 2 = >1 year
+capture confirm variable wh_change_cat
+if _rc {
+    gen byte wh_change_cat = 0
+    replace wh_change_cat = 1 if wh_change == 1
+    replace wh_change_cat = 2 if wh_change > 1
+    label define whcat 0 "0" 1 "1" 2 ">1", replace
+    label values wh_change_cat whcat
+}
+
+
+*-------------------------------*
+* 3) Gender-split regressions (Table D.1)
+*-------------------------------*
+
+* Helper: run the full Table 3 set for a given gender value
+capture program drop run_gender
+program define run_gender
+    args gval glabel
+
+    preserve
+        keep if gender == `gval'
+        di as txt _n "=================================================="
+        di as txt "Running Table D.1 regressions for: `glabel' (gender==`gval')"
+        di as txt "N = " _N
+        di as txt "=================================================="
+
+        * --- WH continuous --- *
+        reghdfe eurod c.wh_change##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+        reghdfe eurodcat c.wh_change##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+        * --- WH binary --- *
+        reghdfe eurod i.wh_change_bin##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+        reghdfe eurodcat i.wh_change_bin##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+        * --- WH categorical (0, 1, >1) --- *
+        reghdfe eurod i.wh_change_cat##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+        reghdfe eurodcat i.wh_change_cat##i.post, ///
+            absorb(cell_block_num post#block) ///
+            vce(cluster cell_block_num mergeid)
+
+    restore
+end
+
+* Run men then women
+run_gender 0 "Men"
+run_gender 1 "Women"
